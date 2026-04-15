@@ -91,8 +91,7 @@ func fetchAndSaveInaTEWS() error {
 	return nil
 }
 
-
-// --- REST API HANDLERS ---
+// REST API HANDLERS
 // Handler 1: Cek status Service
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
