@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	// "fmt"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -31,7 +31,7 @@ func fetchAndSaveInaTEWS() error {
 	url := "https://data.bmkg.go.id/DataMKG/TEWS/autogempa.json"
 	resp, err := http.Get(url)
 	if err != nil {
-		return err
+		return fmt.Errorf("gagal hit API BMKG: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -45,8 +45,14 @@ func fetchAndSaveInaTEWS() error {
 	var exists bool
 	sqlCheck := `SELECT EXISTS(SELECT 1 FROM gempabumi WHERE datetime = $1 AND location_desc = $2)`
 	err = db.QueryRow(sqlCheck, gempa.DateTime, gempa.Wilayah).Scan(&exists)
-	if err != nil || exists {
-		return err
+	if err != nil {
+		return fmt.Errorf("gagal cek DB: %v", err)
+	}
+	
+	// [UPDATE]: Tambah Log agar tidak diam saja
+	if exists {
+		log.Println("[INATEWS] Data gempa sudah ada di DB. Skip insert.")
+		return nil
 	}
 
 	sqlStatement := `
@@ -56,7 +62,7 @@ func fetchAndSaveInaTEWS() error {
 	var insertedID int
 	err = db.QueryRow(sqlStatement, gempa.DateTime, gempa.Magnitude, gempa.Kedalaman, coords[1], coords[0], gempa.Wilayah, gempa.Potensi).Scan(&insertedID)
 	if err == nil {
-		log.Printf("[INATEWS] Gempa baru disimpan (ID: %d) - %s\n", insertedID, gempa.Wilayah)
+		log.Printf("[INATEWS] SUKSES! Gempa baru disimpan (ID: %d) - %s\n", insertedID, gempa.Wilayah)
 	}
 	return err
 }
@@ -66,14 +72,16 @@ func triggerFetchInaTEWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	err := fetchAndSaveInaTEWS()
+	
+	err := fetchAndSaveInaTEWS() // [UPDATE]: Tangkap Error
+	
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": err.Error()})
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Proses Tsunami selesai"})
 }
 
 func getLatestEarthquake(w http.ResponseWriter, r *http.Request) {

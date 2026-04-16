@@ -3,54 +3,101 @@ package main
 import (
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
 )
 
-type PeringatanCuaca struct {
-	XMLName xml.Name `xml:"data"`
-	Warning struct {
-		Tanggal string `xml:"Tanggal"`
-		Narasi  string `xml:"Isi"`
-	} `xml:"peringatan"`
+// Struktur XML untuk membaca format RSS CAP dari BMKG
+type RSS struct {
+	XMLName xml.Name `xml:"rss"`
+	Channel Channel  `xml:"channel"`
+}
+
+type Channel struct {
+	Items []Item `xml:"item"`
+}
+
+type Item struct {
+	Title       string `xml:"title"`
+	Description string `xml:"description"`
+	PubDate     string `xml:"pubDate"`
 }
 
 func fetchAndSaveCuaca() error {
-	url := "https://data.bmkg.go.id/DataMKG/MEWS/PeringatanDini/peringatandini_jabar.xml"
-	resp, err := http.Get(url)
+	// Endpoint API Peringatan Dini Cuaca BMKG TERBARU (Format CAP/RSS)
+	url := "https://www.bmkg.go.id/alerts/nowcast/id"
+	
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("gagal membuat request: %v", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("gagal hit API Cuaca BMKG: %v", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server BMKG menolak (Status: %d). Endpoint bermasalah.", resp.StatusCode)
+	}
+
 	body, _ := ioutil.ReadAll(resp.Body)
-	var data PeringatanCuaca
-	if err := xml.Unmarshal(body, &data); err != nil || data.Warning.Narasi == "" {
-		return err
+	var rss RSS
+	if err := xml.Unmarshal(body, &rss); err != nil {
+		return fmt.Errorf("gagal parsing XML RSS BMKG: %v", err)
 	}
 
-	narasi := data.Warning.Narasi
-	var exists bool
-	db.QueryRow("SELECT EXISTS(SELECT 1 FROM peringatan_dini_cuaca WHERE deskripsi_lengkap = $1)", narasi).Scan(&exists)
-	if exists {
-		return nil
+	ditemukan := false
+
+	// Cek semua peringatan badai aktif di seluruh Indonesia
+	for _, item := range rss.Channel.Items {
+		descLower := strings.ToLower(item.Description)
+		
+		// Filter: Hanya ambil jika menyebut Jawa Barat atau Sukabumi
+		if strings.Contains(descLower, "jawa barat") || strings.Contains(descLower, "sukabumi") {
+			ditemukan = true
+			
+			// Ambil 50 karakter pertama untuk log agar terminal rapi
+			limit := 50
+			if len(item.Description) < 50 { limit = len(item.Description) }
+			log.Printf("[CUACA] Menemukan peringatan Jabar: %s...\n", item.Description[:limit])
+
+			// Cek Duplikasi di Database
+			var exists bool
+			db.QueryRow("SELECT EXISTS(SELECT 1 FROM peringatan_dini_cuaca WHERE deskripsi_lengkap = $1)", item.Description).Scan(&exists)
+			if exists {
+				log.Println("[CUACA] Peringatan ini sudah ada di DB. Skip insert.")
+				continue
+			}
+
+			// Penentuan Wilayah Spesifik
+			wilayah := "Jawa Barat (Umum)"
+			if strings.Contains(descLower, "sukabumi") || strings.Contains(descLower, "pelabuhanratu") {
+				wilayah = "Sukabumi & Sekitarnya"
+			}
+
+			sqlStatement := `INSERT INTO peringatan_dini_cuaca (judul, deskripsi_lengkap, wilayah_terdampak) VALUES ($1, $2, $3) RETURNING id;`
+			
+			var insertedID int
+			if err := db.QueryRow(sqlStatement, item.Title, item.Description, wilayah).Scan(&insertedID); err == nil {
+				log.Printf("[CUACA] SUKSES! Peringatan badai disimpan (ID: %d)\n", insertedID)
+			} else {
+				log.Printf("[CUACA-ERROR] Gagal simpan ke DB: %v\n", err)
+			}
+		}
 	}
 
-	wilayah := "Jawa Barat (Umum)"
-	if strings.Contains(strings.ToLower(narasi), "sukabumi") || strings.Contains(strings.ToLower(narasi), "pelabuhanratu") {
-		wilayah = "Sukabumi & Sekitarnya"
+	if !ditemukan {
+		log.Println("[CUACA] Saat ini langit Jawa Barat AMAN. Tidak ada peringatan dini aktif dari BMKG.")
 	}
 
-	judul := "Peringatan Dini Cuaca " + data.Warning.Tanggal
-	sqlStatement := `INSERT INTO peringatan_dini_cuaca (judul, deskripsi_lengkap, wilayah_terdampak) VALUES ($1, $2, $3) RETURNING id;`
-	
-	var insertedID int
-	if err := db.QueryRow(sqlStatement, judul, narasi, wilayah).Scan(&insertedID); err == nil {
-		log.Printf("[CUACA] Peringatan baru disimpan (ID: %d)\n", insertedID)
-	}
-	return err
+	return nil
 }
 
 func triggerFetchCuaca(w http.ResponseWriter, r *http.Request) {
@@ -58,9 +105,16 @@ func triggerFetchCuaca(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	fetchAndSaveCuaca()
+	
+	err := fetchAndSaveCuaca()
+	
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Proses Cuaca BMKG (CAP/RSS) selesai"})
 }
 
 func getLatestCuaca(w http.ResponseWriter, r *http.Request) {
