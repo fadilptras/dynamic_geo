@@ -49,7 +49,6 @@ func fetchAndSaveInaTEWS() error {
 		return fmt.Errorf("gagal cek DB: %v", err)
 	}
 	
-	// [UPDATE]: Tambah Log agar tidak diam saja
 	if exists {
 		log.Println("[INATEWS] Data gempa sudah ada di DB. Skip insert.")
 		return nil
