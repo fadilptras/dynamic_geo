@@ -1,1 +1,53 @@
-api : INATEWS, INAWAVES ()
+DOKUMENTASI API SERVICE 
+Catatan sumber data dan parameter untuk persiapan Geofence Engine.
+
+1. GEMPA & TSUNAMI (tsunami.go)
+-------------------------------------------------
+- Sumber Api : BMKG InaTEWS
+- URL API    : https://data.bmkg.go.id/DataMKG/TEWS/autogempa.json
+- Format     : JSON
+- Cron Job   : Setiap 5 menit (*/5 * * * *)
+- Target DB  : Tabel 'gempabumi'
+- Data yang diambil:
+  > DateTime    (Waktu kejadian)
+  > Magnitude   (Kekuatan gempa)
+  > Kedalaman   (Kedalaman gempa)
+  > Coordinates (Di-split menjadi Longitude & Latitude -> ST_MakePoint PostGIS)
+  > Wilayah     (Deskripsi lokasi)
+  > Potensi     (Status potensi tsunami)
+
+2. PERINGATAN DINI CUACA BADAI (cuaca.go)
+-------------------------------------------------
+- Sumber Api : BMKG Nowcast (CAP/RSS)
+- URL API    : https://www.bmkg.go.id/alerts/nowcast/id
+- Format     : XML (RSS Feed)
+- Cron Job   : Setiap 15 menit (*/15 * * * *)
+- Target DB  : Tabel 'peringatan_dini_cuaca'
+- Data yang diambil:
+  > Title       (Judul Peringatan)
+  > Description (Narasi lengkap badai/cuaca ekstrem)
+  *Catatan: Sistem melakukan filter "strings.Contains" untuk hanya menyimpan
+   peringatan yang menyebutkan "Jawa Barat" atau "Sukabumi".
+
+3. LOG PARAMETER MARITIM (maritim.go)
+-------------------------------------------------
+- Sumber Api : Open-Meteo Marine & Weather API (Satelit)
+- URL Wave   : https://marine-api.open-meteo.com/v1/marine?latitude=-7.03&longitude=106.53&hourly=wave_height,ocean_current_velocity,ocean_current_direction&timezone=Asia%2FJakarta
+- URL Wind   : https://api.open-meteo.com/v1/forecast?latitude=-7.03&longitude=106.53&current=wind_speed_10m,visibility&timezone=Asia%2FJakarta
+- Format     : JSON
+- Cron Job   : Setiap 1 jam (0 * * * *)
+  Setting 1 jam untuk pilar maritim ini sama sekali tidak membahayakan nelayan, melainkan sangat optimal untuk efisiensi server dan database. Sistemmu menjadi sangat ringan dan cerdas karena ia tahu data mana yang harus dipantau setiap menit (Gempa & Badai) dan data mana yang cukup dipantau setiap jam (Tinggi Ombak).
+- Target DB  : Tabel 'log_parameter_maritim'
+- Data yang diambil:
+  > wave_height             -> tinggi_gelombang_max (Meter) --wave
+  > wind_speed_10m          -> kecepatan_angin_max  (km/jam) --wind
+  > ocean_current_velocity  -> kecepatan_arus       (Dikonversi dari km/h ke m/s) --wave
+  > ocean_current_direction -> arah_arus            (Derajat 0-360) --wave
+  > visibility              -> jarak_pandang_km     (Dikonversi dari m ke km) --wind
+
+
+KONEKSI KE GEOFENCE ENGINE (NEXT STEP):
+- Geofence Engine akan terus membaca 3 tabel di atas melalui endpoint /latest.
+- PRIORITAS 1: Cek Tsunami (InaTEWS) -> Jika Potensi == "Tsunami", poligon jadi MERAH BERKEDIP (Evakuasi).
+- PRIORITAS 2: Cek Cuaca (BMKG Nowcast) -> Jika ada peringatan aktif, poligon berubah KUNING/MERAH (Waspada Badai).
+- PRIORITAS 3: Cek Fisik Laut (Open-Meteo) -> Hitung matematis. Jika ombak > 2.5m ATAU angin > 15 knots, poligon berubah MERAH (Dilarang Melaut).
