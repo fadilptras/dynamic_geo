@@ -1,0 +1,64 @@
+PARAMETERR / ATURAN GEOFENCE ENGINE 
+Menentukan status warna poligon geofence berdasarkan 3 Pilar Ingestion Service untuk kapal nelayan < 10 GT.
+
+1. PILAR 1: GEMPA & TSUNAMI (InaTEWS)
+-------------------------------------------------
+- Parameter yang dicek: 
+  1. Kolom 'tsunami_potential' di tabel 'gempabumi'.
+  2. Jarak spasial (ST_DistanceSphere) antara 'epicenter' gempa dengan titik kapal / geofence
+  3. Besaran Magnitudo ('magnitude').
+- KONDISI BAHAYA (MERAH BERKEDIP - EVAKUASI):
+  Sistem akan menyala merah HANYA JIKA memenuhi salah satu ancaman ini:
+  a. ANCAMAN TSUNAMI: 
+    - 'tsunamis_potential' = "berpotensi tsunami" 
+    - jarak episentrum gempa berada dalam radius <= 1000 KM dari Geofence.
+  b. ANCAMAN GUNCANGAN LOKAL: Gempa berukuran besar (Magnitudo >= 5.5) 
+     DAN jarak episentrum sangat dekat (radius <= 100 KM), yang bisa memicu gelombang kejut tiba-tiba bagi perahu.
+- KONDISI AMAN (HIJAU):
+  Gempa terjadi di luar radius ancaman (> 1000 km), ATAU di dalam radius tapi teks secara tegas menyatakan "tidak berpotensi tsunami" dan magnitudo < 5.5.
+
+2. PILAR 2: CUACA BADAI (BMKG Nowcast CAP/RSS)
+-------------------------------------------------
+- Parameter yang dicek: Kolom 'dibuat_pada' (waktu data ditarik) di tabel 'peringatan_dini_cuaca'.
+- KONDISI AMAN (HIJAU)    : Tidak ada data peringatan masuk dalam 3 jam terakhir.
+- KONDISI WASPADA (KUNING): Ada data peringatan badai/petir untuk Jabar/Sukabumi dalam 3 jam terakhir.
+
+3. PILAR 3: FISIK LAUT / MARITIM (Open-Meteo)
+-------------------------------------------------
+- Parameter yang dicek: Data di tabel 'log_parameter_maritim'.
+- OMBAK (tinggi_gelombang_max):
+  > AMAN (HIJAU)    : < 1.2 meter
+  > WASPADA (KUNING): 1.2 meter - 2.0 meter
+  > BAHAYA (MERAH)  : > 2.0 meter
+- ANGIN (kecepatan_angin_max):
+  > BAHAYA (MERAH)  : > 27 km/jam (sekitar 15 knots)
+- ARUS LAUT (kecepatan_arus):
+  > WASPADA (KUNING): 1.0 m/s - 1.5 m/s
+  > BAHAYA (MERAH)  : > 1.5 m/s (sekitar 3 knots)
+- JARAK PANDANG (jarak_pandang_km):
+  > WASPADA (KUNING): < 2.0 km (risiko tabrakan / kabut laut)
+
+
+KESIMPULAN OUTPUT STATUS GEOFENCE
+=================================================
+Geofence Engine mengeksekusi rule dari prioritas tertinggi (0) ke terendah (4). Jika satu prioritas terpenuhi, logika berhenti dan menetapkan warna tersebut:
+
+⚫ PRIORITAS 0: PENGECEKAN KADALUARSA (BLIND SPOT)
+   JIKA data satelit maritim terakhir usianya > 3 jam dari waktu saat ini.
+   -> AKSI: Poligon ABU-ABU (Sistem offline / Hilang sinyal satelit. Cek manual!).
+
+🔴 PRIORITAS 1: ANCAMAN NYAWA INSTAN (MERAH BERKEDIP)
+   JIKA (Tsunami == TRUE & Radius <= 1000km) ATAU (Gempa >= 5.5 & Radius <= 100km).
+   -> AKSI: Evakuasi Segera ke Daratan.
+
+🔴 PRIORITAS 2: ANCAMAN FISIK LAUT (MERAH)
+   JIKA (Ombak > 2.0m) ATAU (Angin > 27 km/j) ATAU (Arus > 1.5 m/s).
+   -> AKSI: Dilarang Melaut / Berbahaya.
+
+🟡 PRIORITAS 3: WASPADA & HATI-HATI (KUNING)
+   JIKA (Ada Badai 3 Jam Terakhir) ATAU (Ombak 1.2m - 2.0m) ATAU (Arus 1.0m - 1.5m/s) ATAU (Jarak Pandang < 2.0km).
+   -> AKSI: Jangan ke tengah laut / Bersiap kembali.
+
+🟢 PRIORITAS 4: AMAN MELAUT (HIJAU)
+   JIKA semua prioritas 0 hingga 3 tidak terpenuhi.
+   -> AKSI: Aman.
