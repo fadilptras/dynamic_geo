@@ -29,6 +29,8 @@ Catatan sumber data dan parameter untuk persiapan Geofence Engine.
   *Catatan: Sistem melakukan filter "strings.Contains" untuk hanya menyimpan
    peringatan yang menyebutkan "Jawa Barat" atau "Sukabumi".
 
+run cron job : curl -X POST http://localhost:8080/api/fetch/cuaca
+
 3. LOG PARAMETER MARITIM (maritim.go)
 -------------------------------------------------
 - Sumber Api : Open-Meteo Marine & Weather API (Satelit)
@@ -45,6 +47,7 @@ Catatan sumber data dan parameter untuk persiapan Geofence Engine.
   > ocean_current_direction -> arah_arus            (Derajat 0-360) --wave
   > visibility              -> jarak_pandang_km     (Dikonversi dari m ke km) --wind
 
+run cron job : curl -X POST http://localhost:8080/api/fetch/maritim
 
 KONEKSI KE GEOFENCE ENGINE (NEXT STEP):
 - Geofence Engine akan terus membaca 3 tabel di atas melalui endpoint /latest.
